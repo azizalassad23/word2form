@@ -143,11 +143,30 @@ app.get('/api/auth/callback', async (req, res) => {
     
         // Lazy load pdf-parse to prevent startup crashes
         // Use dynamic import to ensure DOMMatrix polyfill is active
-        const pdfParseModule = await import('pdf-parse');
-        const pdfParse = (pdfParseModule as any).default;
+        let pdfParse: any;
+        try {
+          const pdfParseModule = await import('pdf-parse');
+          pdfParse = (pdfParseModule as any).default;
+        } catch (e) {
+          console.error('Dynamic import failed:', e);
+        }
+
+        if (typeof pdfParse !== 'function') {
+          // Fallback to require
+          try {
+            const required = require('pdf-parse');
+            if (typeof required === 'function') {
+              pdfParse = required;
+            } else if (required && typeof required.default === 'function') {
+              pdfParse = required.default;
+            }
+          } catch (e) {
+            console.error('Require failed:', e);
+          }
+        }
         
         if (typeof pdfParse !== 'function') {
-          throw new Error('Failed to load pdf-parse: exported member is not a function');
+          throw new Error(`Failed to load pdf-parse. Type: ${typeof pdfParse}`);
         }
     
         // A. Extract Text
