@@ -119,8 +119,10 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
 
     // A. Extract Text based on file type
     if (file.mimetype === 'application/pdf') {
-      // Lazy load pdf-parse
-      const pdfParse = require('pdf-parse');
+      // Fix pdf-parse import for ES Modules
+      const pdfParseModule = require('pdf-parse');
+      const pdfParse = pdfParseModule.default || pdfParseModule; // Handle both CommonJS and ESM export styles
+      
       const data = await pdfParse(file.buffer);
       text = data.text;
     } else if (
@@ -150,20 +152,15 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
 
     let result;
     try {
-      // Try specific version 001 first
+      // Use the standard stable model
       result = await genAI.models.generateContent({
-        model: 'gemini-1.5-flash-001',
+        model: 'gemini-1.5-flash',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { responseMimeType: 'application/json' }
       });
     } catch (e: any) {
-      console.warn('Gemini 1.5 Flash failed, trying fallback to gemini-pro:', e.message);
-      // Fallback to gemini-pro (older but reliable)
-      // Note: gemini-pro might not support responseMimeType: 'application/json' well, so we remove it
-      result = await genAI.models.generateContent({
-        model: 'gemini-pro',
-        contents: [{ role: 'user', parts: [{ text: prompt + "\n\nRETURN ONLY RAW JSON." }] }]
-      });
+      console.error('Gemini API Error:', e);
+      throw new Error(`AI Model Error: ${e.message}`);
     }
 
     const responseText = result.text();
