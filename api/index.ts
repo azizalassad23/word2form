@@ -105,97 +105,78 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
   try {
-    let prompt = '';
-    let contents: any[] = [];
+    // Polyfill DOMMatrix for pdf-parse (Critical for Node.js environment)
+    if (typeof global.DOMMatrix === 'undefined') {
+      global.DOMMatrix = class DOMMatrix {
+        constructor() { this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0; }
+        toString() { return "matrix(1, 0, 0, 1, 0, 0)"; }
+      };
+    }
 
-    // Prompt instructions
-    const systemPrompt = `
-      You are an expert quiz parser. Extract questions from the provided document and format them as a JSON object.
-      
-      CRITICAL INSTRUCTIONS:
-      1.  **Analyze Visually:** Look for questions, options, and correct answers.
-      2.  **Handle Incomplete Questions:** If a question starts in this chunk but finishes in the next, try to make sense of it.
-      3.  **Images/Diagrams:** Describe them in text (e.g., "[Image: Triangle ABC]").
-      4.  **Math:** Use simple text or LaTeX for formulas.
-      5.  **Format:** Return ONLY a JSON array of objects.
-      
-      JSON Structure:
-      {
-        "title": "Question text",
-        "options": ["A", "B", "C", "D"],
-        "correctAnswer": "Correct option text (or null)",
-        "type": "MULTIPLE_CHOICE"
-      }
-    `;
+    let text = '';
 
+    // A. Extract Text based on file type
     if (file.mimetype === 'application/pdf') {
-      // PDF: Use Multimodal (Base64)
-      const base64Data = file.buffer.toString('base64');
-      
-      // Construct prompt for PDF
-      const pdfPrompt = `
-        You are an expert quiz parser. Extract questions from the provided PDF document chunk.
-        
-        CRITICAL INSTRUCTIONS:
-        1.  **Analyze Visually:** Look for questions, options, and correct answers.
-        2.  **Handle Incomplete Questions:** If a question starts in this chunk but finishes in the next, try to make sense of it.
-        3.  **Images/Diagrams:** Describe them in text (e.g., "[Image: Triangle ABC]").
-        4.  **Math:** Use simple text or LaTeX for formulas.
-        5.  **Format:** Return ONLY a JSON array of objects.
-        
-        JSON Structure:
-        {
-          "title": "Question text",
-          "options": ["A", "B", "C", "D"],
-          "correctAnswer": "Correct option text (or null)",
-          "type": "MULTIPLE_CHOICE"
-        }
-      `;
-
-      contents = [
-        {
-          role: 'user',
-          parts: [
-            { text: pdfPrompt },
-            { inlineData: { mimeType: 'application/pdf', data: base64Data } }
-          ]
-        }
-      ];
+      // Lazy load pdf-parse
+      const pdfParse = require('pdf-parse');
+      const data = await pdfParse(file.buffer);
+      text = data.text;
     } else if (
       file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
       file.mimetype === 'application/msword'
     ) {
-      // Word: Extract Text with Mammoth + Text Prompt
       const result = await mammoth.extractRawText({ buffer: file.buffer });
-      const text = result.value;
-      if (!text.trim()) throw new Error('Could not extract text from Word document');
-      
-      contents = [
-        {
-          role: 'user',
-          parts: [{ text: systemPrompt + `\n\nDocument Text:\n${text.substring(0, 30000)}` }]
-        }
-      ];
+      text = result.value;
     } else {
       return res.status(400).json({ error: 'Unsupported file type' });
     }
 
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({ error: 'Could not extract text. The document might be scanned or empty.' });
+    }
+
+    // B. Send Text to Gemini (Faster & More Reliable than Vision for large docs)
+    const prompt = `
+      You are a quiz parser. Extract questions from the following text and format them as a JSON object.
+      
+      CRITICAL INSTRUCTIONS:
+      1.  **Extract Questions:** Look for numbered questions, multiple choice options (A, B, C, D), and answers.
+      2.  **Format:** Return ONLY a JSON array of objects.
+      
+      JSON Structure:
+      {
+        "title": "Question text",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correctAnswer": "Correct option text (or null)",
+        "type": "MULTIPLE_CHOICE"
+      }
+
+      Document Text:
+      ${text.substring(0, 30000)} // Limit to avoid token overflow
+    `;
+
     const result = await genAI.models.generateContent({
       model: 'gemini-2.0-flash',
-      contents: contents,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: { responseMimeType: 'application/json' }
     });
 
     const responseText = result.text();
     let quizData = [];
+    
     try {
       quizData = JSON.parse(responseText || '[]');
     } catch (e) {
+      // Fallback regex if JSON is dirty
       const match = responseText?.match(/\[.*\]/s);
       if (match) quizData = JSON.parse(match[0]);
     }
 
-    res.json({ success: true, questions: quizData || [] });
+    if (!Array.isArray(quizData) || quizData.length === 0) {
+      return res.status(500).json({ error: 'Failed to parse questions from text.' });
+    }
+
+    res.json({ success: true, questions: quizData });
 
   } catch (error: any) {
     console.error('Parse error:', error);

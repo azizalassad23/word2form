@@ -65,75 +65,36 @@ export default function App() {
     }
   };
 
-  // --- CHUNKING LOGIC ---
+  // --- SIMPLE UPLOAD LOGIC (Reverted for Stability) ---
   const processFile = async () => {
     if (!file || !tokens) return;
     setIsProcessing(true);
     setError(null);
     setQuestions([]);
-    setProgress('Initializing...');
+    setProgress('Uploading and analyzing document...');
+
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
-      let allQuestions: any[] = [];
+      // Send entire file to backend (let backend handle parsing strategy)
+      const res = await fetch('/api/parse', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${tokens.access_token}` },
+        body: formData
+      });
 
-      if (file.type === 'application/pdf') {
-        // PDF Chunking
-        const arrayBuffer = await file.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer);
-        const totalPages = pdfDoc.getPageCount();
-        const CHUNK_SIZE = 3; // Process 3 pages at a time to avoid Vercel 10s timeout
+      const data = await res.json();
 
-        for (let i = 0; i < totalPages; i += CHUNK_SIZE) {
-          const end = Math.min(i + CHUNK_SIZE, totalPages);
-          setProgress(`Processing pages ${i + 1} to ${end} of ${totalPages}...`);
-
-          // Create a new PDF for this chunk
-          const subPdf = await PDFDocument.create();
-          const pages = await subPdf.copyPages(pdfDoc, Array.from({ length: end - i }, (_, k) => i + k));
-          pages.forEach(page => subPdf.addPage(page));
-          const pdfBytes = await subPdf.save();
-          
-          // Upload chunk
-          const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-          const formData = new FormData();
-          formData.append('file', blob, `chunk_${i}.pdf`);
-
-          const res = await fetch('/api/parse', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${tokens.access_token}` },
-            body: formData
-          });
-
-          if (!res.ok) throw new Error(`Failed to process chunk ${i/CHUNK_SIZE + 1}`);
-          const data = await res.json();
-          if (data.questions) {
-            allQuestions = [...allQuestions, ...data.questions];
-          }
-        }
-      } else {
-        // Word Document (No client-side chunking yet, send as is)
-        setProgress('Processing document...');
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const res = await fetch('/api/parse', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${tokens.access_token}` },
-          body: formData
-        });
-
-        if (!res.ok) throw new Error('Failed to process document');
-        const data = await res.json();
-        if (data.questions) {
-          allQuestions = data.questions;
-        }
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to process document');
       }
 
-      if (allQuestions.length === 0) {
-        throw new Error('No questions were found in the document.');
+      if (!data.questions || data.questions.length === 0) {
+        throw new Error('No questions found. Please check the document format.');
       }
 
-      setQuestions(allQuestions);
+      setQuestions(data.questions);
       setIsReviewing(true); // Move to Review Stage
 
     } catch (err: any) {
