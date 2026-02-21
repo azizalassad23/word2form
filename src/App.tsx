@@ -241,22 +241,55 @@ export default function App() {
                 </div>
                 
                 <div className="space-y-6 mb-8 max-h-[60vh] overflow-y-auto pr-2">
-                  {previewData.map((q, idx) => (
-                    <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-                      <p className="font-medium text-slate-800 mb-3">
-                        <span className="text-indigo-600 mr-2">{idx + 1}.</span>
-                        {q.title}
-                      </p>
-                      <div className="space-y-2 pl-6">
-                        {q.options?.map((opt: string, optIdx: number) => (
-                          <div key={optIdx} className="flex items-center gap-2 text-sm text-slate-600">
-                            <div className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" />
-                            <span>{opt}</span>
+                  {previewData.map((q, idx) => {
+                    const hasDuplicates = q.options && new Set(q.options).size !== q.options.length;
+                    
+                    return (
+                      <div key={idx} className={`p-4 bg-slate-50 rounded-xl border ${hasDuplicates ? 'border-red-300 bg-red-50' : 'border-slate-100'}`}>
+                        <div className="flex items-start gap-3 mb-3">
+                          <span className="text-indigo-600 font-medium mt-2">{idx + 1}.</span>
+                          <input 
+                            type="text"
+                            value={q.title}
+                            onChange={(e) => {
+                              const newData = [...previewData];
+                              newData[idx].title = e.target.value;
+                              setPreviewData(newData);
+                            }}
+                            className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                        
+                        <div className="space-y-2 pl-8">
+                          {q.options?.map((opt: string, optIdx: number) => (
+                            <div key={optIdx} className="flex items-center gap-2">
+                              <div className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" />
+                              <input 
+                                type="text"
+                                value={opt}
+                                onChange={(e) => {
+                                  const newData = [...previewData];
+                                  newData[idx].options[optIdx] = e.target.value;
+                                  setPreviewData(newData);
+                                }}
+                                className={`flex-1 bg-white border rounded-lg px-3 py-1.5 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                                  q.options.filter((o: string) => o === opt).length > 1 
+                                    ? 'border-red-300 text-red-600' 
+                                    : 'border-slate-200'
+                                }`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        {hasDuplicates && (
+                          <div className="mt-3 pl-8 text-xs text-red-600 font-medium flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" />
+                            Duplicate options detected. Please modify or remove duplicates.
                           </div>
-                        ))}
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -268,7 +301,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={handlePublish}
-                    disabled={isPublishing}
+                    disabled={isPublishing || previewData.some(q => q.options && new Set(q.options).size !== q.options.length)}
                     className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isPublishing ? (
