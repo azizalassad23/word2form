@@ -1,31 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, Upload, FileText, CheckCircle, AlertCircle, Edit2, Trash2, Plus, Save, ArrowRight } from 'lucide-react';
-import { PDFDocument } from 'pdf-lib';
+import { motion } from 'motion/react';
+import { Loader2, Upload, FileText, CheckCircle, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [tokens, setTokens] = useState<any>(null);
   const [file, setFile] = useState<File | null>(null);
-  
-  // States for processing
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState('');
-  const [questions, setQuestions] = useState<any[]>([]);
-  const [isReviewing, setIsReviewing] = useState(false);
-  
-  // States for final creation
-  const [isCreating, setIsCreating] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Check for existing tokens in localStorage (optional, for persistence across reloads)
     const storedTokens = localStorage.getItem('google_tokens');
     if (storedTokens) {
       setTokens(JSON.parse(storedTokens));
-      setUser({ name: 'Teacher' });
+      setUser({ name: 'Teacher' }); // Placeholder, ideally fetch user info
     }
 
+    // Listen for OAuth success message
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'OAUTH_SUCCESS') {
         const { tokens } = event.data;
@@ -42,7 +35,11 @@ export default function App() {
     try {
       const res = await fetch('/api/auth/url');
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to get auth URL');
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to get auth URL');
+      }
+
       const { url } = data;
       const width = 500;
       const height = 600;
@@ -50,7 +47,8 @@ export default function App() {
       const top = window.screen.height / 2 - height / 2;
       window.open(url, 'google_login', `width=${width},height=${height},top=${top},left=${left}`);
     } catch (err: any) {
-      alert(`Login Error: ${err.message}`);
+      console.error('Login failed', err);
+      alert(`Login Error: ${err.message}`); // Show visible error to user
       setError(err.message);
     }
   };
@@ -59,222 +57,183 @@ export default function App() {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
       setError(null);
-      setResult(null);
-      setIsReviewing(false);
-      setQuestions([]);
     }
   };
 
-  // --- SIMPLE UPLOAD LOGIC (Reverted for Stability) ---
-  const processFile = async () => {
+  const handleConvert = async () => {
     if (!file || !tokens) return;
-    setIsProcessing(true);
-    setError(null);
-    setQuestions([]);
-    setProgress('Uploading and analyzing document...');
 
+    setIsConverting(true);
+    setError(null);
+    
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('title', file.name.replace(/\.[^/.]+$/, "")); // Remove extension for title
 
     try {
-      // Send entire file to backend (let backend handle parsing strategy)
-      const res = await fetch('/api/parse', {
+      const res = await fetch('/api/convert', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${tokens.access_token}` },
+        headers: {
+          'Authorization': `Bearer ${tokens.access_token}`
+        },
         body: formData
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to process document');
+        throw new Error(data.error || 'Conversion failed');
       }
-
-      if (!data.questions || data.questions.length === 0) {
-        throw new Error('No questions found. Please check the document format.');
-      }
-
-      setQuestions(data.questions);
-      setIsReviewing(true); // Move to Review Stage
-
-    } catch (err: any) {
-      console.error('Processing error', err);
-      setError(err.message);
-    } finally {
-      setIsProcessing(false);
-      setProgress('');
-    }
-  };
-
-  // --- REVIEW LOGIC ---
-  const updateQuestion = (index: number, field: string, value: any) => {
-    const newQuestions = [...questions];
-    newQuestions[index] = { ...newQuestions[index], [field]: value };
-    setQuestions(newQuestions);
-  };
-
-  const deleteQuestion = (index: number) => {
-    const newQuestions = questions.filter((_, i) => i !== index);
-    setQuestions(newQuestions);
-  };
-
-  // --- FINAL CREATION ---
-  const createForm = async () => {
-    if (!tokens) return;
-    setIsCreating(true);
-    setError(null);
-
-    try {
-      const res = await fetch('/api/create-form', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokens.access_token}`
-        },
-        body: JSON.stringify({
-          title: file?.name.replace(/\.[^/.]+$/, "") || 'Generated Quiz',
-          questions: questions
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create form');
 
       setResult(data);
-      setIsReviewing(false); // Done
     } catch (err: any) {
-      console.error('Creation error', err);
+      console.error('Conversion error', err);
       setError(err.message);
     } finally {
-      setIsCreating(false);
+      setIsConverting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <FileText className="w-6 h-6 text-indigo-600" />
           <h1 className="text-xl font-semibold tracking-tight">QuizConverter AI</h1>
         </div>
-        {user && <div className="text-sm font-medium text-slate-600">Teacher Mode</div>}
+        {user ? (
+          <div className="text-sm font-medium text-slate-600">
+            Welcome, Teacher
+          </div>
+        ) : (
+          <button 
+            onClick={handleLogin}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Sign in with Google
+          </button>
+        )}
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-8">
+      <main className="max-w-3xl mx-auto px-6 py-12">
+        <div className="text-center mb-12">
+          <h2 className="text-3xl font-bold tracking-tight mb-4">Transform Word & PDF into Google Forms</h2>
+          <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+            Upload your exam questions and let AI automatically generate a ready-to-use Google Form quiz for your students.
+          </p>
+        </div>
+
         {!user ? (
-          <div className="text-center py-20">
-            <h2 className="text-3xl font-bold mb-6">Transform Exams into Google Forms</h2>
-            <button onClick={handleLogin} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors">
-              Sign in with Google
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center">
+            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Upload className="w-8 h-8 text-indigo-600" />
+            </div>
+            <h3 className="text-xl font-semibold mb-2">Get Started</h3>
+            <p className="text-slate-500 mb-8">Sign in to connect your Google Drive and Forms.</p>
+            <button 
+              onClick={handleLogin}
+              className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+            >
+              Connect Google Account
             </button>
           </div>
         ) : (
-          <>
-            {/* STAGE 1: UPLOAD */}
-            {!isReviewing && !result && (
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-xl mx-auto">
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
-                  <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 hover:border-indigo-400 transition-colors relative cursor-pointer">
-                    <input type="file" accept=".docx,.pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                    <Upload className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                    <p className="text-lg font-medium text-slate-700">{file ? file.name : "Upload Exam File"}</p>
-                    <p className="text-sm text-slate-500 mt-2">PDF (Auto-chunking supported) or Word</p>
-                  </div>
-
-                  {file && (
-                    <button
-                      onClick={processFile}
-                      disabled={isProcessing}
-                      className="mt-6 w-full py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 flex justify-center items-center gap-2"
-                    >
-                      {isProcessing ? <><Loader2 className="animate-spin w-5 h-5" /> {progress}</> : "Analyze Document"}
-                    </button>
-                  )}
+          <div className="space-y-8">
+            {/* Upload Section */}
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8"
+            >
+              <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center hover:border-indigo-400 transition-colors cursor-pointer relative">
+                <input 
+                  type="file" 
+                  accept=".docx,.pdf" 
+                  onChange={handleFileChange}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <div className="pointer-events-none">
+                  <Upload className="w-10 h-10 text-slate-400 mx-auto mb-4" />
+                  <p className="text-lg font-medium text-slate-700 mb-1">
+                    {file ? file.name : "Drop your exam file here"}
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    Supports .docx and .pdf
+                  </p>
                 </div>
-              </motion.div>
-            )}
+              </div>
 
-            {/* STAGE 2: REVIEW */}
-            {isReviewing && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold">Review Questions ({questions.length})</h2>
+              {file && (
+                <div className="mt-6 flex justify-end">
                   <button
-                    onClick={createForm}
-                    disabled={isCreating}
-                    className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-200"
+                    onClick={handleConvert}
+                    disabled={isConverting}
+                    className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isCreating ? <Loader2 className="animate-spin w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}
-                    {isCreating ? "Creating Form..." : "Export to Google Form"}
+                    {isConverting ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Converting...
+                      </>
+                    ) : (
+                      <>
+                        Generate Quiz
+                      </>
+                    )}
                   </button>
                 </div>
+              )}
+            </motion.div>
 
-                <div className="space-y-6">
-                  {questions.map((q, i) => (
-                    <motion.div key={i} layout className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 group">
-                      <div className="flex justify-between items-start gap-4 mb-4">
-                        <div className="flex-1">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Question {i + 1}</label>
-                          <textarea
-                            value={q.title}
-                            onChange={(e) => updateQuestion(i, 'title', e.target.value)}
-                            className="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium text-lg"
-                            rows={2}
-                          />
-                        </div>
-                        <button onClick={() => deleteQuestion(i)} className="text-slate-400 hover:text-red-500 p-2">
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </div>
-
-                      {q.type === 'MULTIPLE_CHOICE' && (
-                        <div className="space-y-2 pl-4 border-l-2 border-slate-100">
-                          {q.options?.map((opt: string, optIdx: number) => (
-                            <div key={optIdx} className="flex items-center gap-2">
-                              <div className="w-4 h-4 rounded-full border border-slate-300 flex-shrink-0" />
-                              <input
-                                type="text"
-                                value={opt}
-                                onChange={(e) => {
-                                  const newOptions = [...q.options];
-                                  newOptions[optIdx] = e.target.value;
-                                  updateQuestion(i, 'options', newOptions);
-                                }}
-                                className="flex-1 p-1.5 border border-slate-100 rounded hover:border-slate-300 focus:border-indigo-500 text-sm"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-
-            {/* STAGE 3: SUCCESS */}
-            {result && (
-              <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="max-w-xl mx-auto text-center bg-emerald-50 border border-emerald-100 p-10 rounded-3xl">
-                <CheckCircle className="w-16 h-16 text-emerald-600 mx-auto mb-4" />
-                <h2 className="text-3xl font-bold text-emerald-900 mb-2">Success!</h2>
-                <p className="text-emerald-700 mb-8">Your quiz has been created in Google Forms.</p>
-                <div className="flex gap-4 justify-center">
-                  <a href={result.editUrl} target="_blank" className="px-6 py-3 bg-white text-emerald-700 border border-emerald-200 rounded-xl font-medium hover:bg-emerald-100">Edit Form</a>
-                  <a href={result.formUrl} target="_blank" className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 shadow-lg">View Live</a>
-                </div>
-                <button onClick={() => { setResult(null); setFile(null); }} className="mt-8 text-emerald-600 hover:underline text-sm">Convert another file</button>
-              </motion.div>
-            )}
-
-            {/* ERROR TOAST */}
+            {/* Error Message */}
             {error && (
-              <div className="fixed bottom-6 right-6 bg-red-600 text-white p-4 rounded-xl shadow-xl flex items-center gap-3 max-w-md animate-in slide-in-from-bottom-10">
-                <AlertCircle className="w-6 h-6 flex-shrink-0" />
-                <p className="text-sm font-medium">{error}</p>
-                <button onClick={() => setError(null)} className="ml-auto text-white/80 hover:text-white">✕</button>
-              </div>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="bg-red-50 text-red-700 p-4 rounded-xl flex items-start gap-3"
+              >
+                <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <h4 className="font-medium">Conversion Failed</h4>
+                  <p className="text-sm opacity-90">{error}</p>
+                </div>
+              </motion.div>
             )}
-          </>
+
+            {/* Success Result */}
+            {result && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-emerald-50 border border-emerald-100 p-8 rounded-2xl text-center"
+              >
+                <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle className="w-8 h-8 text-emerald-600" />
+                </div>
+                <h3 className="text-2xl font-bold text-emerald-900 mb-2">Quiz Generated!</h3>
+                <p className="text-emerald-700 mb-8">Your Google Form is ready to be shared.</p>
+                
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <a 
+                    href={result.editUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="px-6 py-3 bg-white text-emerald-700 border border-emerald-200 rounded-xl font-medium hover:bg-emerald-50 transition-colors"
+                  >
+                    Edit Form
+                  </a>
+                  <a 
+                    href={result.formUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
+                  >
+                    View Live Form
+                  </a>
+                </div>
+              </motion.div>
+            )}
+          </div>
         )}
       </main>
     </div>

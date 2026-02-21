@@ -4,9 +4,9 @@ import cookieParser from 'cookie-parser';
 import { google } from 'googleapis';
 import { GoogleGenAI } from '@google/genai';
 import mammoth from 'mammoth';
+import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 
 // Fix for __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -16,17 +16,17 @@ const require = createRequire(import.meta.url);
 const app = express();
 
 // Middleware
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json());
 app.use(cookieParser());
 
-// Configure Multer
+// Configure Multer for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Google OAuth Configuration
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
-// Helper to sanitize APP_URL
+// Helper to sanitize APP_URL (remove trailing slash if present)
 const getAppUrl = () => {
   const url = process.env.APP_URL;
   if (!url) return '';
@@ -35,7 +35,7 @@ const getAppUrl = () => {
 
 const REDIRECT_URI = `${getAppUrl()}/api/auth/callback`;
 
-// Scopes
+// Scopes for Google Forms and Drive
 const SCOPES = [
   'https://www.googleapis.com/auth/forms.body',
   'https://www.googleapis.com/auth/drive.file',
@@ -58,73 +58,95 @@ app.get('/api/auth/url', (req, res) => {
     if (!CLIENT_ID || !CLIENT_SECRET) {
       return res.status(500).json({ error: 'Google Client ID/Secret not configured' });
     }
-    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+
+    const oauth2Client = new google.auth.OAuth2(
+      CLIENT_ID,
+      CLIENT_SECRET,
+      REDIRECT_URI
+    );
+
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
       include_granted_scopes: true
     });
+
     res.json({ url: authUrl });
   } catch (error: any) {
     console.error('Auth URL Error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
   }
 });
 
 // 2. Auth Callback
 app.get('/api/auth/callback', async (req, res) => {
   const { code } = req.query;
-  if (!code || typeof code !== 'string') return res.status(400).send('Missing code');
+
+  if (!code || typeof code !== 'string') {
+    return res.status(400).send('Missing code');
+  }
 
   try {
-    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+    const oauth2Client = new google.auth.OAuth2(
+      CLIENT_ID,
+      CLIENT_SECRET,
+      REDIRECT_URI
+    );
+
     const { tokens } = await oauth2Client.getToken(code);
+    
     const script = `
       <script>
         if (window.opener) {
-          window.opener.postMessage({ type: 'OAUTH_SUCCESS', tokens: ${JSON.stringify(tokens)} }, '*');
+          window.opener.postMessage({ 
+            type: 'OAUTH_SUCCESS', 
+            tokens: ${JSON.stringify(tokens)} 
+          }, '*');
           window.close();
         } else {
           document.body.innerHTML = 'Authentication successful. You can close this window.';
         }
       </script>
     `;
+    
     res.send(script);
   } catch (error) {
-    console.error('Auth Error:', error);
+    console.error('Error exchanging code for tokens:', error);
     res.status(500).send('Authentication failed');
   }
 });
 
-// 3. Parse File (Extract Questions)
-app.post('/api/parse', upload.single('file'), async (req, res) => {
-  console.log('--- API PARSE CALLED (VERSION: GEMINI-1.5-FLASH-001) ---'); // Debug log to confirm code update
-  
+// 3. Convert File to Form
+app.post('/api/convert', upload.single('file'), async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  const accessToken = authHeader.split(' ')[1];
   const file = req.file;
-  if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+  if (!file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
 
   try {
-    // Polyfill DOMMatrix for pdf-parse (Critical for Node.js environment)
+    // Polyfill DOMMatrix for pdf-parse in Node.js environment
     if (typeof global.DOMMatrix === 'undefined') {
       global.DOMMatrix = class DOMMatrix {
-        constructor() { this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0; }
+        constructor() {
+          this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+        }
         toString() { return "matrix(1, 0, 0, 1, 0, 0)"; }
       };
     }
 
-    let text = '';
+    // Lazy load pdf-parse to prevent startup crashes
+    const pdfParse = require('pdf-parse');
 
-    // A. Extract Text based on file type
+    // A. Extract Text
+    let text = '';
     if (file.mimetype === 'application/pdf') {
-      // Fix pdf-parse import for ES Modules
-      const pdfParseModule = require('pdf-parse');
-      const pdfParse = pdfParseModule.default || pdfParseModule; 
-      
       const data = await pdfParse(file.buffer);
       text = data.text;
     } else if (
@@ -134,85 +156,54 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
       const result = await mammoth.extractRawText({ buffer: file.buffer });
       text = result.value;
     } else {
-      return res.status(400).json({ error: 'Unsupported file type' });
+      return res.status(400).json({ error: 'Unsupported file type. Please upload PDF or Word (.docx).' });
     }
 
-    if (!text || text.trim().length === 0) {
-      return res.status(400).json({ error: 'Could not extract text. The document might be scanned or empty.' });
+    if (!text.trim()) {
+      return res.status(400).json({ error: 'Could not extract text from file.' });
     }
 
-    // B. Send Text to Gemini
+    // B. Parse with Gemini
     const prompt = `
-      Extract questions from this text into a JSON array.
-      If the text implies an image (e.g., "Look at the figure below"), include "[IMAGE]" in the title.
+      You are a quiz parser. Extract questions from the following text and format them as a JSON object.
+      The JSON should be an array of objects, where each object represents a question.
       
-      Format: [{"title": "...", "options": ["..."], "correctAnswer": "...", "type": "MULTIPLE_CHOICE"}]
-      
-      Text:
-      ${text.substring(0, 20000)}
+      Each question object should have:
+      - "title": The question text (string).
+      - "options": An array of strings representing the possible answers (if multiple choice).
+      - "correctAnswer": The correct answer string (must match one of the options exactly). If not found, leave null.
+      - "type": "MULTIPLE_CHOICE" or "TEXT" (if no options found).
+
+      Text to parse:
+      ${text.substring(0, 30000)} // Limit text length to avoid token limits if necessary
     `;
 
-    let result;
-    try {
-      // Use the latest allowed flash model
-      result = await genAI.models.generateContent({
-        model: 'gemini-2.5-flash-latest',
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: { responseMimeType: 'application/json' }
-      });
-    } catch (e: any) {
-      console.error('Gemini API Error:', e);
-      throw new Error(`AI Model Error: ${e.message}`);
-    }
+    const result = await genAI.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
 
-    const responseText = result.text();
-    let quizData = [];
-    
-    try {
-      quizData = JSON.parse(responseText || '[]');
-    } catch (e) {
-      const match = responseText?.match(/\[.*\]/s);
-      if (match) quizData = JSON.parse(match[0]);
-    }
+    const quizData = JSON.parse(result.text || '[]');
 
     if (!Array.isArray(quizData) || quizData.length === 0) {
-      return res.status(500).json({ error: 'Failed to parse questions. AI returned empty data.' });
+      return res.status(500).json({ error: 'Failed to parse quiz data from text.' });
     }
 
-    res.json({ success: true, questions: quizData });
-
-  } catch (error: any) {
-    console.error('Parse error:', error);
-    res.status(500).json({ error: error.message || 'Failed to parse document' });
-  }
-});
-
-// 4. Create Form
-app.post('/api/create-form', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const accessToken = authHeader.split(' ')[1];
-  const { title, questions } = req.body;
-
-  if (!questions || !Array.isArray(questions)) {
-    return res.status(400).json({ error: 'Invalid questions data' });
-  }
-
-  try {
+    // C. Create Google Form
     const oauth2Client = new google.auth.OAuth2();
     oauth2Client.setCredentials({ access_token: accessToken });
 
     const forms = google.forms({ version: 'v1', auth: oauth2Client });
 
-    // 1. Create Form
+    // 1. Create a new form
     const createResponse = await forms.forms.create({
       requestBody: {
         info: {
-          title: title || 'Generated Quiz',
-          documentTitle: title || 'Generated Quiz',
+          title: req.body.title || 'Generated Quiz',
+          documentTitle: req.body.title || 'Generated Quiz',
         }
       }
     });
@@ -220,35 +211,28 @@ app.post('/api/create-form', async (req, res) => {
     const formId = createResponse.data.formId;
     if (!formId) throw new Error('Failed to create form');
 
-    // 2. Add Questions
-    const requests = questions.map((q: any, index: number) => {
-      const isMultipleChoice = q.type === 'MULTIPLE_CHOICE' && q.options && q.options.length > 0;
-      let questionItem: any;
-      
-      if (isMultipleChoice) {
-        questionItem = {
-          question: {
-            required: true,
-            choiceQuestion: {
-              type: 'RADIO',
-              options: q.options.map((opt: string) => ({ value: opt })),
-              shuffle: true
-            }
+    // 2. Add questions to the form (batchUpdate)
+    const requests = quizData.map((q, index) => {
+      const questionItem: any = {
+        question: {
+          required: true,
+          choiceQuestion: {
+            type: 'RADIO',
+            options: q.options?.map((opt: string) => ({ value: opt })) || [],
+            shuffle: true
           }
-        };
-      } else {
-        questionItem = {
-          question: {
-            required: true,
-            textQuestion: { paragraph: false }
-          }
-        };
-      }
+        }
+      };
       
       return {
         createItem: {
-          item: { title: q.title, questionItem: questionItem },
-          location: { index: index }
+          item: {
+            title: q.title,
+            questionItem: questionItem
+          },
+          location: {
+            index: index
+          }
         }
       };
     });
@@ -256,7 +240,9 @@ app.post('/api/create-form', async (req, res) => {
     if (requests.length > 0) {
       await forms.forms.batchUpdate({
         formId: formId,
-        requestBody: { requests: requests }
+        requestBody: {
+          requests: requests
+        }
       });
     }
 
@@ -267,8 +253,8 @@ app.post('/api/create-form', async (req, res) => {
     });
 
   } catch (error: any) {
-    console.error('Create Form error:', error);
-    res.status(500).json({ error: error.message || 'Failed to create form' });
+    console.error('Conversion error:', error);
+    res.status(500).json({ error: error.message || 'An error occurred during conversion' });
   }
 });
 
