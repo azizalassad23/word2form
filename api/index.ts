@@ -116,146 +116,169 @@ app.get('/api/auth/callback', async (req, res) => {
   }
 });
 
-// 3. Convert File to Form
-app.post('/api/convert', upload.single('file'), async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const accessToken = authHeader.split(' ')[1];
-  const file = req.file;
-
-  if (!file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-
-  try {
-    // Polyfill DOMMatrix for pdf-parse in Node.js environment
-    if (typeof global.DOMMatrix === 'undefined') {
-      global.DOMMatrix = class DOMMatrix {
-        constructor() {
-          this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+    // 3. Parse File to JSON (Preview)
+    app.post('/api/parse', upload.single('file'), async (req, res) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    
+      const file = req.file;
+    
+      if (!file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+    
+      try {
+        // Polyfill DOMMatrix for pdf-parse in Node.js environment
+        if (typeof (global as any).DOMMatrix === 'undefined') {
+          (global as any).DOMMatrix = class DOMMatrix {
+            a: number; b: number; c: number; d: number; e: number; f: number;
+            constructor() {
+              this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+            }
+            toString() { return "matrix(1, 0, 0, 1, 0, 0)"; }
+          } as any;
         }
-        toString() { return "matrix(1, 0, 0, 1, 0, 0)"; }
-      };
-    }
-
-    // Lazy load pdf-parse to prevent startup crashes
-    const pdfParse = require('pdf-parse');
-
-    // A. Extract Text
-    let text = '';
-    if (file.mimetype === 'application/pdf') {
-      const data = await pdfParse(file.buffer);
-      text = data.text;
-    } else if (
-      file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
-      file.mimetype === 'application/msword'
-    ) {
-      const result = await mammoth.extractRawText({ buffer: file.buffer });
-      text = result.value;
-    } else {
-      return res.status(400).json({ error: 'Unsupported file type. Please upload PDF or Word (.docx).' });
-    }
-
-    if (!text.trim()) {
-      return res.status(400).json({ error: 'Could not extract text from file.' });
-    }
-
-    // B. Parse with Gemini
-    const prompt = `
-      You are a quiz parser. Extract questions from the following text and format them as a JSON object.
-      The JSON should be an array of objects, where each object represents a question.
-      
-      Each question object should have:
-      - "title": The question text (string).
-      - "options": An array of strings representing the possible answers (if multiple choice).
-      - "correctAnswer": The correct answer string (must match one of the options exactly). If not found, leave null.
-      - "type": "MULTIPLE_CHOICE" or "TEXT" (if no options found).
-
-      Text to parse:
-      ${text.substring(0, 30000)} // Limit text length to avoid token limits if necessary
-    `;
-
-    const result = await genAI.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: 'application/json'
+    
+        // Lazy load pdf-parse to prevent startup crashes
+        const pdfParse = require('pdf-parse');
+    
+        // A. Extract Text
+        let text = '';
+        if (file.mimetype === 'application/pdf') {
+          const data = await pdfParse(file.buffer);
+          text = data.text;
+        } else if (
+          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+          file.mimetype === 'application/msword'
+        ) {
+          const result = await mammoth.extractRawText({ buffer: file.buffer });
+          text = result.value;
+        } else {
+          return res.status(400).json({ error: 'Unsupported file type. Please upload PDF or Word (.docx).' });
+        }
+    
+        if (!text.trim()) {
+          return res.status(400).json({ error: 'Could not extract text from file.' });
+        }
+    
+        // B. Parse with Gemini
+        const prompt = `
+          You are a quiz parser. Extract questions from the following text and format them as a JSON object.
+          The JSON should be an array of objects, where each object represents a question.
+          
+          Each question object should have:
+          - "title": The question text (string).
+          - "options": An array of strings representing the possible answers (if multiple choice).
+          - "correctAnswer": The correct answer string (must match one of the options exactly). If not found, leave null.
+          - "type": "MULTIPLE_CHOICE" or "TEXT" (if no options found).
+    
+          Text to parse:
+          ${text.substring(0, 30000)} // Limit text length to avoid token limits if necessary
+        `;
+    
+        const result = await genAI.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+    
+        const quizData = JSON.parse(result.text || '[]');
+    
+        if (!Array.isArray(quizData) || quizData.length === 0) {
+          return res.status(500).json({ error: 'Failed to parse quiz data from text.' });
+        }
+        
+        res.json({ success: true, questions: quizData });
+    
+      } catch (error: any) {
+        console.error('Parse error:', error);
+        res.status(500).json({ error: error.message || 'An error occurred during parsing' });
       }
     });
 
-    const quizData = JSON.parse(result.text || '[]');
+    // 4. Publish to Google Form
+    app.post('/api/publish', async (req, res) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    
+      const accessToken = authHeader.split(' ')[1];
+      const { title, questions } = req.body;
 
-    if (!Array.isArray(quizData) || quizData.length === 0) {
-      return res.status(500).json({ error: 'Failed to parse quiz data from text.' });
-    }
-
-    // C. Create Google Form
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({ access_token: accessToken });
-
-    const forms = google.forms({ version: 'v1', auth: oauth2Client });
-
-    // 1. Create a new form
-    const createResponse = await forms.forms.create({
-      requestBody: {
-        info: {
-          title: req.body.title || 'Generated Quiz',
-          documentTitle: req.body.title || 'Generated Quiz',
+      if (!questions || !Array.isArray(questions)) {
+        return res.status(400).json({ error: 'Invalid questions data' });
+      }
+    
+      try {
+        // C. Create Google Form
+        const oauth2Client = new google.auth.OAuth2();
+        oauth2Client.setCredentials({ access_token: accessToken });
+    
+        const forms = google.forms({ version: 'v1', auth: oauth2Client });
+    
+        // 1. Create a new form
+        const createResponse = await forms.forms.create({
+          requestBody: {
+            info: {
+              title: title || 'Generated Quiz',
+              documentTitle: title || 'Generated Quiz',
+            }
+          }
+        });
+    
+        const formId = createResponse.data.formId;
+        if (!formId) throw new Error('Failed to create form');
+    
+        // 2. Add questions to the form (batchUpdate)
+        const requests = questions.map((q: any, index: number) => {
+          const questionItem: any = {
+            question: {
+              required: true,
+              choiceQuestion: {
+                type: 'RADIO',
+                options: q.options?.map((opt: string) => ({ value: opt })) || [],
+                shuffle: true
+              }
+            }
+          };
+          
+          return {
+            createItem: {
+              item: {
+                title: q.title,
+                questionItem: questionItem
+              },
+              location: {
+                index: index
+              }
+            }
+          };
+        });
+    
+        if (requests.length > 0) {
+          await forms.forms.batchUpdate({
+            formId: formId,
+            requestBody: {
+              requests: requests
+            }
+          });
         }
+    
+        res.json({ 
+          success: true, 
+          formUrl: createResponse.data.responderUri,
+          editUrl: `https://docs.google.com/forms/d/${formId}/edit`
+        });
+    
+      } catch (error: any) {
+        console.error('Publish error:', error);
+        res.status(500).json({ error: error.message || 'An error occurred during publishing' });
       }
     });
-
-    const formId = createResponse.data.formId;
-    if (!formId) throw new Error('Failed to create form');
-
-    // 2. Add questions to the form (batchUpdate)
-    const requests = quizData.map((q, index) => {
-      const questionItem: any = {
-        question: {
-          required: true,
-          choiceQuestion: {
-            type: 'RADIO',
-            options: q.options?.map((opt: string) => ({ value: opt })) || [],
-            shuffle: true
-          }
-        }
-      };
-      
-      return {
-        createItem: {
-          item: {
-            title: q.title,
-            questionItem: questionItem
-          },
-          location: {
-            index: index
-          }
-        }
-      };
-    });
-
-    if (requests.length > 0) {
-      await forms.forms.batchUpdate({
-        formId: formId,
-        requestBody: {
-          requests: requests
-        }
-      });
-    }
-
-    res.json({ 
-      success: true, 
-      formUrl: createResponse.data.responderUri,
-      editUrl: `https://docs.google.com/forms/d/${formId}/edit`
-    });
-
-  } catch (error: any) {
-    console.error('Conversion error:', error);
-    res.status(500).json({ error: error.message || 'An error occurred during conversion' });
-  }
-});
 
 export default app;
