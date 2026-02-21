@@ -136,11 +136,11 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <FileText className="w-6 h-6 text-indigo-600" />
-          <h1 className="text-xl font-semibold tracking-tight">QuizConverter AI</h1>
+          <h1 className="text-xl font-semibold tracking-tight">word2form</h1>
         </div>
         {user ? (
           <div className="text-sm font-medium text-slate-600">
@@ -156,7 +156,7 @@ export default function App() {
         )}
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-12">
+      <main className="max-w-3xl mx-auto px-6 py-12 flex-grow">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold tracking-tight mb-4">Transform Word & PDF into Google Forms</h2>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
@@ -380,6 +380,10 @@ export default function App() {
           </div>
         )}
       </main>
+      
+      <footer className="bg-white border-t border-slate-200 py-6 text-center text-slate-500 text-sm">
+        <p>M. Aziz Al Assad, S.T., G.r | 2026</p>
+      </footer>
     </div>
   );
 }
