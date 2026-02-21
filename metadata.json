@@ -1,0 +1,5 @@
+{
+  "name": "QuizConverter AI",
+  "description": "Convert Word/PDF documents into Google Forms using AI",
+  "requestFramePermissions": []
+}
