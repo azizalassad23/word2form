@@ -34,15 +34,22 @@ export default function App() {
   const handleLogin = async () => {
     try {
       const res = await fetch('/api/auth/url');
-      const { url } = await res.json();
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to get auth URL');
+      }
+
+      const { url } = data;
       const width = 500;
       const height = 600;
       const left = window.screen.width / 2 - width / 2;
       const top = window.screen.height / 2 - height / 2;
       window.open(url, 'google_login', `width=${width},height=${height},top=${top},left=${left}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed', err);
-      setError('Failed to initiate login');
+      alert(`Login Error: ${err.message}`); // Show visible error to user
+      setError(err.message);
     }
   };
 

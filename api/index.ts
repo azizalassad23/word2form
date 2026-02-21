@@ -26,7 +26,15 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Google OAuth Configuration
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = `${process.env.APP_URL}/api/auth/callback`;
+
+// Helper to sanitize APP_URL (remove trailing slash if present)
+const getAppUrl = () => {
+  const url = process.env.APP_URL;
+  if (!url) return '';
+  return url.endsWith('/') ? url.slice(0, -1) : url;
+};
+
+const REDIRECT_URI = `${getAppUrl()}/api/auth/callback`;
 
 // Scopes for Google Forms and Drive
 const SCOPES = [
