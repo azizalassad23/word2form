@@ -156,7 +156,7 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
     `;
 
     const result = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-1.5-flash',
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: { responseMimeType: 'application/json' }
     });
