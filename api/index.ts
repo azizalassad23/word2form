@@ -142,7 +142,11 @@ app.get('/api/auth/callback', async (req, res) => {
         }
     
         // Lazy load pdf-parse to prevent startup crashes
-        const pdfParse = require('pdf-parse');
+        let pdfParse = require('pdf-parse');
+        // Handle potential default export issue with require in some environments
+        if (typeof pdfParse !== 'function' && (pdfParse as any).default) {
+          pdfParse = (pdfParse as any).default;
+        }
     
         // A. Extract Text
         let text = '';
