@@ -123,7 +123,7 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
     if (file.mimetype === 'application/pdf') {
       // Fix pdf-parse import for ES Modules
       const pdfParseModule = require('pdf-parse');
-      const pdfParse = pdfParseModule.default || pdfParseModule; // Handle both CommonJS and ESM export styles
+      const pdfParse = pdfParseModule.default || pdfParseModule; 
       
       const data = await pdfParse(file.buffer);
       text = data.text;
@@ -154,9 +154,9 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
 
     let result;
     try {
-      // Use specific version to avoid 404s
+      // Use the latest allowed flash model
       result = await genAI.models.generateContent({
-        model: 'gemini-1.5-flash-001',
+        model: 'gemini-2.5-flash-latest',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { responseMimeType: 'application/json' }
       });
