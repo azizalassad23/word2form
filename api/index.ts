@@ -141,35 +141,30 @@ app.get('/api/auth/callback', async (req, res) => {
           } as any;
         }
     
-        // Lazy load pdf-parse to prevent startup crashes
-        const pdfParse = require('pdf-parse');
-        
-        if (typeof pdfParse !== 'function') {
-           throw new Error(`pdf-parse is not a function. Type: ${typeof pdfParse}`);
-        }
-    
-        // A. Extract Text
+        // A. Extract Text (Try local extraction first)
         let text = '';
-        if (file.mimetype === 'application/pdf') {
-          const data = await pdfParse(file.buffer);
-          text = data.text;
-        } else if (
-          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
-          file.mimetype === 'application/msword'
-        ) {
-          const result = await mammoth.extractRawText({ buffer: file.buffer });
-          text = result.value;
-        } else {
-          return res.status(400).json({ error: 'Unsupported file type. Please upload PDF or Word (.docx).' });
-        }
-    
-        if (!text.trim()) {
-          return res.status(400).json({ error: 'Could not extract text from file.' });
+        try {
+            if (file.mimetype === 'application/pdf') {
+                // Lazy load pdf-parse
+                const pdfParse = require('pdf-parse');
+                if (typeof pdfParse === 'function') {
+                    const data = await pdfParse(file.buffer);
+                    text = data.text;
+                }
+            } else if (
+              file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+              file.mimetype === 'application/msword'
+            ) {
+              const result = await mammoth.extractRawText({ buffer: file.buffer });
+              text = result.value;
+            }
+        } catch (extractError) {
+            console.warn('Local text extraction failed, falling back to multimodal:', extractError);
         }
     
         // B. Parse with Gemini
-        const prompt = `
-          You are a quiz parser. Extract questions from the following text and format them as a JSON object.
+        const systemPrompt = `
+          You are a quiz parser. Extract questions from the provided content and format them as a JSON object.
           The JSON should be an array of objects, where each object represents a question.
           
           Each question object should have:
@@ -177,14 +172,30 @@ app.get('/api/auth/callback', async (req, res) => {
           - "options": An array of strings representing the possible answers (if multiple choice).
           - "correctAnswer": The correct answer string (must match one of the options exactly). If not found, leave null.
           - "type": "MULTIPLE_CHOICE" or "TEXT" (if no options found).
-    
-          Text to parse:
-          ${text.substring(0, 30000)} // Limit text length to avoid token limits if necessary
         `;
+
+        let parts: any[] = [];
+        
+        if (text && text.trim().length > 0) {
+            // Use extracted text
+            parts = [{ text: systemPrompt + "\n\nText to parse:\n" + text.substring(0, 30000) }];
+        } else {
+            // Fallback: Send file directly to Gemini (Multimodal)
+            console.log('Using multimodal input for file:', file.mimetype);
+            parts = [
+                { text: systemPrompt },
+                {
+                    inlineData: {
+                        mimeType: file.mimetype,
+                        data: file.buffer.toString('base64')
+                    }
+                }
+            ];
+        }
     
         const result = await genAI.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          contents: [{ role: 'user', parts: parts }],
           config: {
             responseMimeType: 'application/json'
           }
@@ -193,7 +204,7 @@ app.get('/api/auth/callback', async (req, res) => {
         const quizData = JSON.parse(result.text || '[]');
     
         if (!Array.isArray(quizData) || quizData.length === 0) {
-          return res.status(500).json({ error: 'Failed to parse quiz data from text.' });
+          return res.status(500).json({ error: 'Failed to parse quiz data from file.' });
         }
         
         res.json({ success: true, questions: quizData });
