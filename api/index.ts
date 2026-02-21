@@ -131,11 +131,32 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
     if (file.mimetype === 'application/pdf') {
       // PDF: Use Multimodal (Base64)
       const base64Data = file.buffer.toString('base64');
+      
+      // Construct prompt for PDF
+      const pdfPrompt = `
+        You are an expert quiz parser. Extract questions from the provided PDF document chunk.
+        
+        CRITICAL INSTRUCTIONS:
+        1.  **Analyze Visually:** Look for questions, options, and correct answers.
+        2.  **Handle Incomplete Questions:** If a question starts in this chunk but finishes in the next, try to make sense of it.
+        3.  **Images/Diagrams:** Describe them in text (e.g., "[Image: Triangle ABC]").
+        4.  **Math:** Use simple text or LaTeX for formulas.
+        5.  **Format:** Return ONLY a JSON array of objects.
+        
+        JSON Structure:
+        {
+          "title": "Question text",
+          "options": ["A", "B", "C", "D"],
+          "correctAnswer": "Correct option text (or null)",
+          "type": "MULTIPLE_CHOICE"
+        }
+      `;
+
       contents = [
         {
           role: 'user',
           parts: [
-            { text: systemPrompt },
+            { text: pdfPrompt },
             { inlineData: { mimeType: 'application/pdf', data: base64Data } }
           ]
         }
