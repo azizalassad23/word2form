@@ -142,10 +142,12 @@ app.get('/api/auth/callback', async (req, res) => {
         }
     
         // Lazy load pdf-parse to prevent startup crashes
-        let pdfParse = require('pdf-parse');
-        // Handle potential default export issue with require in some environments
-        if (typeof pdfParse !== 'function' && (pdfParse as any).default) {
-          pdfParse = (pdfParse as any).default;
+        // Use dynamic import to ensure DOMMatrix polyfill is active
+        const pdfParseModule = await import('pdf-parse');
+        const pdfParse = (pdfParseModule as any).default;
+        
+        if (typeof pdfParse !== 'function') {
+          throw new Error('Failed to load pdf-parse: exported member is not a function');
         }
     
         // A. Extract Text
