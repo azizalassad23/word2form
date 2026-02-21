@@ -12,7 +12,6 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
 
 const app = express();
 
@@ -55,23 +54,28 @@ app.get('/api/health', (req, res) => {
 
 // 1. Get Auth URL
 app.get('/api/auth/url', (req, res) => {
-  if (!CLIENT_ID || !CLIENT_SECRET) {
-    return res.status(500).json({ error: 'Google Client ID/Secret not configured' });
+  try {
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+      return res.status(500).json({ error: 'Google Client ID/Secret not configured' });
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      CLIENT_ID,
+      CLIENT_SECRET,
+      REDIRECT_URI
+    );
+
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+      include_granted_scopes: true
+    });
+
+    res.json({ url: authUrl });
+  } catch (error: any) {
+    console.error('Auth URL Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
   }
-
-  const oauth2Client = new google.auth.OAuth2(
-    CLIENT_ID,
-    CLIENT_SECRET,
-    REDIRECT_URI
-  );
-
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-    include_granted_scopes: true
-  });
-
-  res.json({ url: authUrl });
 });
 
 // 2. Auth Callback
@@ -127,6 +131,9 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
   }
 
   try {
+    // Lazy load pdf-parse to prevent startup crashes
+    const pdfParse = require('pdf-parse');
+
     // A. Extract Text
     let text = '';
     if (file.mimetype === 'application/pdf') {
