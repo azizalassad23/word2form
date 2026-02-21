@@ -131,6 +131,16 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
   }
 
   try {
+    // Polyfill DOMMatrix for pdf-parse in Node.js environment
+    if (typeof global.DOMMatrix === 'undefined') {
+      global.DOMMatrix = class DOMMatrix {
+        constructor() {
+          this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+        }
+        toString() { return "matrix(1, 0, 0, 1, 0, 0)"; }
+      };
+    }
+
     // Lazy load pdf-parse to prevent startup crashes
     const pdfParse = require('pdf-parse');
 
