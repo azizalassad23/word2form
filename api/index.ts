@@ -137,7 +137,7 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Could not extract text. The document might be scanned or empty.' });
     }
 
-    // B. Send Text to Gemini (Optimized for Speed)
+    // B. Send Text to Gemini
     const prompt = `
       Extract questions from this text into a JSON array.
       If the text implies an image (e.g., "Look at the figure below"), include "[IMAGE]" in the title.
@@ -148,11 +148,23 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
       ${text.substring(0, 20000)}
     `;
 
-    const result = await genAI.models.generateContent({
-      model: 'gemini-1.5-flash', // Fastest model
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: { responseMimeType: 'application/json' }
-    });
+    let result;
+    try {
+      // Try specific version 001 first
+      result = await genAI.models.generateContent({
+        model: 'gemini-1.5-flash-001',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: { responseMimeType: 'application/json' }
+      });
+    } catch (e: any) {
+      console.warn('Gemini 1.5 Flash failed, trying fallback to gemini-pro:', e.message);
+      // Fallback to gemini-pro (older but reliable)
+      // Note: gemini-pro might not support responseMimeType: 'application/json' well, so we remove it
+      result = await genAI.models.generateContent({
+        model: 'gemini-pro',
+        contents: [{ role: 'user', parts: [{ text: prompt + "\n\nRETURN ONLY RAW JSON." }] }]
+      });
+    }
 
     const responseText = result.text();
     let quizData = [];
