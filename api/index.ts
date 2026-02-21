@@ -142,31 +142,10 @@ app.get('/api/auth/callback', async (req, res) => {
         }
     
         // Lazy load pdf-parse to prevent startup crashes
-        // Use dynamic import to ensure DOMMatrix polyfill is active
-        let pdfParse: any;
-        try {
-          const pdfParseModule = await import('pdf-parse');
-          pdfParse = (pdfParseModule as any).default;
-        } catch (e) {
-          console.error('Dynamic import failed:', e);
-        }
-
-        if (typeof pdfParse !== 'function') {
-          // Fallback to require
-          try {
-            const required = require('pdf-parse');
-            if (typeof required === 'function') {
-              pdfParse = required;
-            } else if (required && typeof required.default === 'function') {
-              pdfParse = required.default;
-            }
-          } catch (e) {
-            console.error('Require failed:', e);
-          }
-        }
+        const pdfParse = require('pdf-parse');
         
         if (typeof pdfParse !== 'function') {
-          throw new Error(`Failed to load pdf-parse. Type: ${typeof pdfParse}`);
+           throw new Error(`pdf-parse is not a function. Type: ${typeof pdfParse}`);
         }
     
         // A. Extract Text
