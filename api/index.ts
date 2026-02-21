@@ -6,18 +6,20 @@ import { GoogleGenAI } from '@google/genai';
 import mammoth from 'mammoth';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 // Fix for __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const app = express();
 
 // Middleware
-app.use(express.json({ limit: '50mb' })); // Increase limit for large payloads
+app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 
-// Configure Multer for file uploads
+// Configure Multer
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Google OAuth Configuration
@@ -135,28 +137,19 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Could not extract text. The document might be scanned or empty.' });
     }
 
-    // B. Send Text to Gemini (Faster & More Reliable than Vision for large docs)
+    // B. Send Text to Gemini (Optimized for Speed)
     const prompt = `
-      You are a quiz parser. Extract questions from the following text and format them as a JSON object.
+      Extract questions from this text into a JSON array.
+      If the text implies an image (e.g., "Look at the figure below"), include "[IMAGE]" in the title.
       
-      CRITICAL INSTRUCTIONS:
-      1.  **Extract Questions:** Look for numbered questions, multiple choice options (A, B, C, D), and answers.
-      2.  **Format:** Return ONLY a JSON array of objects.
+      Format: [{"title": "...", "options": ["..."], "correctAnswer": "...", "type": "MULTIPLE_CHOICE"}]
       
-      JSON Structure:
-      {
-        "title": "Question text",
-        "options": ["Option A", "Option B", "Option C", "Option D"],
-        "correctAnswer": "Correct option text (or null)",
-        "type": "MULTIPLE_CHOICE"
-      }
-
-      Document Text:
-      ${text.substring(0, 30000)} // Limit to avoid token overflow
+      Text:
+      ${text.substring(0, 20000)}
     `;
 
     const result = await genAI.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-1.5-flash', // Fastest model
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: { responseMimeType: 'application/json' }
     });
@@ -167,13 +160,12 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
     try {
       quizData = JSON.parse(responseText || '[]');
     } catch (e) {
-      // Fallback regex if JSON is dirty
       const match = responseText?.match(/\[.*\]/s);
       if (match) quizData = JSON.parse(match[0]);
     }
 
     if (!Array.isArray(quizData) || quizData.length === 0) {
-      return res.status(500).json({ error: 'Failed to parse questions from text.' });
+      return res.status(500).json({ error: 'Failed to parse questions. AI returned empty data.' });
     }
 
     res.json({ success: true, questions: quizData });
@@ -184,7 +176,7 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
   }
 });
 
-// 4. Create Form (From Reviewed Data)
+// 4. Create Form
 app.post('/api/create-form', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
