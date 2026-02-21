@@ -98,6 +98,8 @@ app.get('/api/auth/callback', async (req, res) => {
 
 // 3. Parse File (Extract Questions)
 app.post('/api/parse', upload.single('file'), async (req, res) => {
+  console.log('--- API PARSE CALLED (VERSION: GEMINI-1.5-FLASH-001) ---'); // Debug log to confirm code update
+  
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -152,9 +154,9 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
 
     let result;
     try {
-      // Use the standard stable model
+      // Use specific version to avoid 404s
       result = await genAI.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-1.5-flash-001',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { responseMimeType: 'application/json' }
       });
